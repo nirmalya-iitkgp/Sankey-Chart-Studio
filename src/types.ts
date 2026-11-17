@@ -85,3 +85,12 @@ export interface SampleDataset {
   numberFormat: NumberFormat;
   rows: Omit<FlowRow, 'id'>[];
 }
+
+export interface SankeyDocumentState {
+  rows: FlowRow[];
+  aspectRatio: AspectRatio;
+  activePaletteId: string;
+  customPaletteColors: Record<string, string[]>;
+  nodeColorOverrides: Record<string, string>;
+  style: SankeyStyleConfig;
+}

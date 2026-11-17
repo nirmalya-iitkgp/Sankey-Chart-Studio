@@ -1,5 +1,15 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { Download, FileCode2, Image as ImageIcon, Layers, Palette as PaletteIcon, SlidersHorizontal, Table2 } from 'lucide-react';
+import {
+  Download,
+  FileCode2,
+  Image as ImageIcon,
+  Layers,
+  Palette as PaletteIcon,
+  Redo2,
+  SlidersHorizontal,
+  Table2,
+  Undo2,
+} from 'lucide-react';
 import { BulkPasteModal } from './components/BulkPasteModal';
 import { DataInputTab } from './components/DataInputTab';
 import { LayoutStylingTab } from './components/LayoutStylingTab';
@@ -9,7 +19,8 @@ import { exportSankeyToPng, exportSankeyToSvg } from './exportUtils';
 import { EXECUTIVE_PALETTES, SAMPLE_DATASETS } from './palettes';
 import { exportSankeyToPptx } from './pptxExporter';
 import { computeSankeyLayout } from './sankeyMath';
-import { AspectRatio, FlowRow, SankeyStyleConfig } from './types';
+import { AspectRatio, FlowRow, SankeyDocumentState, SankeyStyleConfig } from './types';
+import { useHistoryManager } from './useHistoryManager';
 
 type SidebarTab = 'data' | 'palettes' | 'layout';
 
@@ -27,34 +38,50 @@ function hydrateRows(rows: Array<Omit<FlowRow, 'id'>>): FlowRow[] {
   }));
 }
 
-export default function App() {
+function createInitialDocumentState(): SankeyDocumentState {
   const initialSample = SAMPLE_DATASETS[0];
+  return {
+    rows: hydrateRows(initialSample.rows),
+    aspectRatio: '16:9',
+    activePaletteId: EXECUTIVE_PALETTES[0].id,
+    customPaletteColors: {},
+    nodeColorOverrides: {},
+    style: {
+      nodeWidth: 18,
+      nodePadding: 20,
+      ribbonOpacity: 45,
+      fontSize: 12,
+      linkColorMode: 'source',
+      nodeAlign: 'justify',
+      showValues: true,
+      numberFormat: initialSample.numberFormat,
+      showHeader: true,
+      title: initialSample.title,
+      subtitle: initialSample.subtitle,
+    },
+  };
+}
 
-  const [rows, setRows] = useState<FlowRow[]>(() => hydrateRows(initialSample.rows));
-  const [aspectRatio, setAspectRatio] = useState<AspectRatio>('16:9');
+export default function App() {
+  const {
+    state: doc,
+    commit,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+    undoLabel,
+    redoLabel,
+  } = useHistoryManager<SankeyDocumentState>(createInitialDocumentState);
+
+  const { rows, aspectRatio, activePaletteId, customPaletteColors, nodeColorOverrides, style } = doc;
+
   const [activeTab, setActiveTab] = useState<SidebarTab>('data');
-  const [activePaletteId, setActivePaletteId] = useState<string>(EXECUTIVE_PALETTES[0].id);
-  const [customPaletteColors, setCustomPaletteColors] = useState<Record<string, string[]>>({});
-  const [nodeColorOverrides, setNodeColorOverrides] = useState<Record<string, string>>({});
   const [selectedNodeName, setSelectedNodeName] = useState<string | null>(null);
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
   const [isExportingPptx, setIsExportingPptx] = useState(false);
   const [isExportingPng, setIsExportingPng] = useState(false);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
-
-  const [style, setStyle] = useState<SankeyStyleConfig>({
-    nodeWidth: 18,
-    nodePadding: 20,
-    ribbonOpacity: 45,
-    fontSize: 12,
-    linkColorMode: 'source',
-    nodeAlign: 'justify',
-    showValues: true,
-    numberFormat: initialSample.numberFormat,
-    showHeader: true,
-    title: initialSample.title,
-    subtitle: initialSample.subtitle,
-  });
 
   const svgRef = useRef<SVGSVGElement | null>(null);
 
@@ -80,116 +107,267 @@ export default function App() {
     }, 3200);
   }, []);
 
-  const handleUpdateRow = useCallback((id: string, patch: Partial<Omit<FlowRow, 'id'>>) => {
-    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
-  }, []);
+  const handleSetAspectRatio = useCallback(
+    (nextRatio: AspectRatio) => {
+      commit(
+        (prev) => (prev.aspectRatio === nextRatio ? prev : { ...prev, aspectRatio: nextRatio }),
+        { label: `Switch to ${nextRatio}` }
+      );
+    },
+    [commit]
+  );
 
-  const handleDeleteRow = useCallback((id: string) => {
-    setRows((prev) => prev.filter((r) => r.id !== id));
-  }, []);
+  const handleUpdateRow = useCallback(
+    (id: string, patch: Partial<Omit<FlowRow, 'id'>>) => {
+      const fields = Object.keys(patch).sort().join(',');
+      commit(
+        (prev) => ({
+          ...prev,
+          rows: prev.rows.map((r) => (r.id === id ? { ...r, ...patch } : r)),
+        }),
+        {
+          label: 'Edit flow row',
+          groupKey: `row:${id}:${fields}`,
+        }
+      );
+    },
+    [commit]
+  );
+
+  const handleDeleteRow = useCallback(
+    (id: string) => {
+      commit(
+        (prev) => ({
+          ...prev,
+          rows: prev.rows.filter((r) => r.id !== id),
+        }),
+        { label: 'Delete flow row' }
+      );
+    },
+    [commit]
+  );
 
   const handleAddRow = useCallback(() => {
-    setRows((prev) => [
-      ...prev,
-      {
-        id: createRowId(),
-        source: '',
-        target: '',
-        value: 1000,
-      },
-    ]);
-  }, []);
+    commit(
+      (prev) => ({
+        ...prev,
+        rows: [
+          ...prev.rows,
+          {
+            id: createRowId(),
+            source: '',
+            target: '',
+            value: 1000,
+          },
+        ],
+      }),
+      { label: 'Add flow row' }
+    );
+  }, [commit]);
 
   const handleApplyBulkRows = useCallback(
     (incoming: Array<Omit<FlowRow, 'id'>>, mode: 'replace' | 'append') => {
       const hydrated = hydrateRows(incoming);
       if (mode === 'replace') {
-        setRows(hydrated);
-        setNodeColorOverrides({});
         setSelectedNodeName(null);
-      } else {
-        setRows((prev) => [...prev, ...hydrated]);
       }
+      commit(
+        (prev) =>
+          mode === 'replace'
+            ? {
+                ...prev,
+                rows: hydrated,
+                nodeColorOverrides: {},
+              }
+            : {
+                ...prev,
+                rows: [...prev.rows, ...hydrated],
+              },
+        { label: mode === 'replace' ? 'Replace flows via CSV' : 'Append flows via CSV' }
+      );
     },
-    []
+    [commit]
   );
 
-  const handleLoadSample = useCallback((sampleId: string) => {
-    const found = SAMPLE_DATASETS.find((s) => s.id === sampleId);
-    if (!found) return;
-    setRows(hydrateRows(found.rows));
-    setNodeColorOverrides({});
-    setSelectedNodeName(null);
-    setStyle((prev) => ({
-      ...prev,
-      title: found.title,
-      subtitle: found.subtitle,
-      numberFormat: found.numberFormat,
-    }));
-  }, []);
+  const handleLoadSample = useCallback(
+    (sampleId: string) => {
+      const found = SAMPLE_DATASETS.find((s) => s.id === sampleId);
+      if (!found) return;
+      setSelectedNodeName(null);
+      commit(
+        (prev) => ({
+          ...prev,
+          rows: hydrateRows(found.rows),
+          nodeColorOverrides: {},
+          style: {
+            ...prev.style,
+            title: found.title,
+            subtitle: found.subtitle,
+            numberFormat: found.numberFormat,
+          },
+        }),
+        { label: `Load "${found.name}"` }
+      );
+    },
+    [commit]
+  );
+
+  const handleSelectPalette = useCallback(
+    (paletteId: string) => {
+      const target = EXECUTIVE_PALETTES.find((p) => p.id === paletteId);
+      commit(
+        (prev) =>
+          prev.activePaletteId === paletteId ? prev : { ...prev, activePaletteId: paletteId },
+        { label: `Apply ${target?.name || 'palette'}` }
+      );
+    },
+    [commit]
+  );
 
   const handleUpdateSwatch = useCallback(
     (index: number, hex: string) => {
-      setCustomPaletteColors((prev) => {
-        const current = prev[activePalette.id] || [...activePalette.colors];
-        const next = [...current];
-        next[index] = hex;
-        return { ...prev, [activePalette.id]: next };
-      });
+      commit(
+        (prev) => {
+          const palette =
+            EXECUTIVE_PALETTES.find((p) => p.id === prev.activePaletteId) || EXECUTIVE_PALETTES[0];
+          const current = prev.customPaletteColors[palette.id] || [...palette.colors];
+          const next = [...current];
+          next[index] = hex;
+          return {
+            ...prev,
+            customPaletteColors: { ...prev.customPaletteColors, [palette.id]: next },
+          };
+        },
+        {
+          label: 'Edit palette colour',
+          groupKey: `swatch:${activePalette.id}:${index}`,
+        }
+      );
     },
-    [activePalette]
+    [commit, activePalette.id]
   );
 
   const handleAddSwatch = useCallback(() => {
-    setCustomPaletteColors((prev) => {
-      const current = prev[activePalette.id] || [...activePalette.colors];
-      if (current.length >= 12) return prev;
-      const nextColor = current[current.length % activePalette.colors.length] || '#334155';
-      return { ...prev, [activePalette.id]: [...current, nextColor] };
-    });
-  }, [activePalette]);
+    commit(
+      (prev) => {
+        const palette =
+          EXECUTIVE_PALETTES.find((p) => p.id === prev.activePaletteId) || EXECUTIVE_PALETTES[0];
+        const current = prev.customPaletteColors[palette.id] || [...palette.colors];
+        if (current.length >= 12) return prev;
+        const nextColor = current[current.length % palette.colors.length] || '#334155';
+        return {
+          ...prev,
+          customPaletteColors: {
+            ...prev.customPaletteColors,
+            [palette.id]: [...current, nextColor],
+          },
+        };
+      },
+      { label: 'Add palette swatch' }
+    );
+  }, [commit]);
 
   const handleRemoveSwatch = useCallback(
     (index: number) => {
-      setCustomPaletteColors((prev) => {
-        const current = prev[activePalette.id] || [...activePalette.colors];
-        if (current.length <= 2) return prev;
-        return {
-          ...prev,
-          [activePalette.id]: current.filter((_, idx) => idx !== index),
-        };
-      });
+      commit(
+        (prev) => {
+          const palette =
+            EXECUTIVE_PALETTES.find((p) => p.id === prev.activePaletteId) || EXECUTIVE_PALETTES[0];
+          const current = prev.customPaletteColors[palette.id] || [...palette.colors];
+          if (current.length <= 2) return prev;
+          return {
+            ...prev,
+            customPaletteColors: {
+              ...prev.customPaletteColors,
+              [palette.id]: current.filter((_, idx) => idx !== index),
+            },
+          };
+        },
+        { label: 'Remove palette swatch' }
+      );
     },
-    [activePalette]
+    [commit]
   );
 
   const handleResetPalette = useCallback(() => {
-    setCustomPaletteColors((prev) => {
-      const next = { ...prev };
-      delete next[activePalette.id];
-      return next;
-    });
-  }, [activePalette]);
+    commit(
+      (prev) => {
+        if (!prev.customPaletteColors[prev.activePaletteId]) return prev;
+        const next = { ...prev.customPaletteColors };
+        delete next[prev.activePaletteId];
+        return { ...prev, customPaletteColors: next };
+      },
+      { label: 'Reset palette swatches' }
+    );
+  }, [commit]);
 
-  const handleSetNodeColor = useCallback((nodeName: string, hex: string) => {
-    setNodeColorOverrides((prev) => ({ ...prev, [nodeName]: hex }));
-  }, []);
+  const handleSetNodeColor = useCallback(
+    (nodeName: string, hex: string) => {
+      commit(
+        (prev) => ({
+          ...prev,
+          nodeColorOverrides: { ...prev.nodeColorOverrides, [nodeName]: hex },
+        }),
+        {
+          label: `Recolour "${nodeName}"`,
+          groupKey: `nodeColor:${nodeName}`,
+        }
+      );
+    },
+    [commit]
+  );
 
-  const handleClearNodeColor = useCallback((nodeName: string) => {
-    setNodeColorOverrides((prev) => {
-      const next = { ...prev };
-      delete next[nodeName];
-      return next;
-    });
-  }, []);
+  const handleClearNodeColor = useCallback(
+    (nodeName: string) => {
+      commit(
+        (prev) => {
+          if (!prev.nodeColorOverrides[nodeName]) return prev;
+          const next = { ...prev.nodeColorOverrides };
+          delete next[nodeName];
+          return { ...prev, nodeColorOverrides: next };
+        },
+        { label: `Reset "${nodeName}" colour` }
+      );
+    },
+    [commit]
+  );
 
   const handleClearAllNodeColors = useCallback(() => {
-    setNodeColorOverrides({});
-  }, []);
+    commit(
+      (prev) =>
+        Object.keys(prev.nodeColorOverrides).length === 0
+          ? prev
+          : { ...prev, nodeColorOverrides: {} },
+      { label: 'Clear all node colour overrides' }
+    );
+  }, [commit]);
 
-  const handleUpdateStyle = useCallback((patch: Partial<SankeyStyleConfig>) => {
-    setStyle((prev) => ({ ...prev, ...patch }));
-  }, []);
+  const handleUpdateStyle = useCallback(
+    (patch: Partial<SankeyStyleConfig>) => {
+      const continuousKeys = new Set([
+        'nodeWidth',
+        'nodePadding',
+        'ribbonOpacity',
+        'fontSize',
+        'title',
+        'subtitle',
+      ]);
+      const patchKeys = Object.keys(patch).sort();
+      const isContinuous = patchKeys.every((k) => continuousKeys.has(k));
+
+      commit(
+        (prev) => ({
+          ...prev,
+          style: { ...prev.style, ...patch },
+        }),
+        {
+          label: 'Update layout & styling',
+          groupKey: isContinuous ? `style:${patchKeys.join(',')}` : undefined,
+        }
+      );
+    },
+    [commit]
+  );
 
   const handleExportPptx = async () => {
     if (layout.diagnostic || layout.nodes.length === 0) {
@@ -253,7 +431,7 @@ export default function App() {
         >
           <button
             type="button"
-            onClick={() => setAspectRatio('16:9')}
+            onClick={() => handleSetAspectRatio('16:9')}
             className={`rounded-md px-3 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
               aspectRatio === '16:9'
                 ? 'bg-white text-slate-900 shadow-xs'
@@ -264,7 +442,7 @@ export default function App() {
           </button>
           <button
             type="button"
-            onClick={() => setAspectRatio('4:3')}
+            onClick={() => handleSetAspectRatio('4:3')}
             className={`rounded-md px-3 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
               aspectRatio === '4:3'
                 ? 'bg-white text-slate-900 shadow-xs'
@@ -275,13 +453,41 @@ export default function App() {
           </button>
         </div>
 
-        {/* Export Actions */}
+        {/* Undo / Redo + Export Actions */}
         <div className="flex items-center gap-2 shrink-0">
           {exportStatus && (
-            <span className="hidden xl:inline text-xs font-medium text-slate-600 mr-2 whitespace-nowrap">
+            <span className="hidden xl:inline text-xs font-medium text-slate-600 mr-1 whitespace-nowrap">
               {exportStatus}
             </span>
           )}
+
+          <div className="flex items-center gap-1" role="group" aria-label="History controls">
+            <button
+              type="button"
+              onClick={undo}
+              disabled={!canUndo}
+              title={undoLabel ? `Undo: ${undoLabel} (Ctrl/⌘Z)` : 'Nothing to undo (Ctrl/⌘Z)'}
+              aria-label={undoLabel ? `Undo ${undoLabel}` : 'Undo'}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 hover:text-slate-900 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-slate-900 disabled:cursor-not-allowed disabled:opacity-40 whitespace-nowrap shrink-0"
+            >
+              <Undo2 className="h-3.5 w-3.5" />
+              <span className="hidden md:inline">Undo</span>
+            </button>
+            <button
+              type="button"
+              onClick={redo}
+              disabled={!canRedo}
+              title={redoLabel ? `Redo: ${redoLabel} (Ctrl/⌘⇧Z)` : 'Nothing to redo (Ctrl/⌘⇧Z)'}
+              aria-label={redoLabel ? `Redo ${redoLabel}` : 'Redo'}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 hover:text-slate-900 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-slate-900 disabled:cursor-not-allowed disabled:opacity-40 whitespace-nowrap shrink-0"
+            >
+              <Redo2 className="h-3.5 w-3.5" />
+              <span className="hidden md:inline">Redo</span>
+            </button>
+          </div>
+
+          <div className="hidden sm:block h-5 w-px bg-slate-200 mx-0.5" aria-hidden="true" />
+
           <button
             type="button"
             disabled={!canExport}
@@ -322,7 +528,7 @@ export default function App() {
             <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-0.5">
               <button
                 type="button"
-                onClick={() => setAspectRatio('16:9')}
+                onClick={() => handleSetAspectRatio('16:9')}
                 className={`rounded-md px-2.5 py-1 text-xs font-medium ${
                   aspectRatio === '16:9' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600'
                 }`}
@@ -331,7 +537,7 @@ export default function App() {
               </button>
               <button
                 type="button"
-                onClick={() => setAspectRatio('4:3')}
+                onClick={() => handleSetAspectRatio('4:3')}
                 className={`rounded-md px-2.5 py-1 text-xs font-medium ${
                   aspectRatio === '4:3' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600'
                 }`}
@@ -415,7 +621,7 @@ export default function App() {
                 nodes={layout.nodes}
                 selectedNodeName={selectedNodeName}
                 nodeColorOverrides={nodeColorOverrides}
-                onSelectPalette={setActivePaletteId}
+                onSelectPalette={handleSelectPalette}
                 onUpdateSwatch={handleUpdateSwatch}
                 onAddSwatch={handleAddSwatch}
                 onRemoveSwatch={handleRemoveSwatch}
