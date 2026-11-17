@@ -1,0 +1,6 @@
+{
+  "name": "SankeyStudio",
+  "description": "Zero-backend client-side Sankey Diagram Generator with native editable PowerPoint vector shape export, SVG/PNG export, and curated executive palettes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
