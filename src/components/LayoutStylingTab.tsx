@@ -1,12 +1,17 @@
 import React from 'react';
-import { LinkColorMode, NodeAlign, NumberFormat, SankeyStyleConfig } from '../types';
+import { ChartType, LinkColorMode, NodeAlign, NumberFormat, SankeyStyleConfig } from '../types';
 
 interface LayoutStylingTabProps {
+  chartType: ChartType;
   style: SankeyStyleConfig;
   onChange: (patch: Partial<SankeyStyleConfig>) => void;
 }
 
-export const LayoutStylingTab: React.FC<LayoutStylingTabProps> = ({ style, onChange }) => {
+export const LayoutStylingTab: React.FC<LayoutStylingTabProps> = ({
+  chartType,
+  style,
+  onChange,
+}) => {
   const linkModes: Array<{ value: LinkColorMode; label: string }> = [
     { value: 'source', label: 'Source Node' },
     { value: 'target', label: 'Target Node' },
@@ -87,47 +92,95 @@ export const LayoutStylingTab: React.FC<LayoutStylingTabProps> = ({ style, onCha
           Geometry &amp; Typography
         </h3>
 
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between text-xs">
-            <label htmlFor="slider-node-width" className="text-slate-700">
-              Node Width
-            </label>
-            <span className="font-mono text-[11px] text-slate-600 tabular-nums">
-              {style.nodeWidth} px
-            </span>
-          </div>
-          <input
-            id="slider-node-width"
-            type="range"
-            min={8}
-            max={40}
-            step={1}
-            value={style.nodeWidth}
-            onChange={(e) => onChange({ nodeWidth: Number(e.target.value) })}
-            className="w-full"
-          />
-        </div>
+        {chartType === 'sankey' ? (
+          <>
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <label htmlFor="slider-node-width" className="text-slate-700">
+                  Node Width
+                </label>
+                <span className="font-mono text-[11px] text-slate-600 tabular-nums">
+                  {style.nodeWidth} px
+                </span>
+              </div>
+              <input
+                id="slider-node-width"
+                type="range"
+                min={8}
+                max={40}
+                step={1}
+                value={style.nodeWidth}
+                onChange={(e) => onChange({ nodeWidth: Number(e.target.value) })}
+                className="w-full"
+              />
+            </div>
 
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between text-xs">
-            <label htmlFor="slider-node-padding" className="text-slate-700">
-              Node Padding
-            </label>
-            <span className="font-mono text-[11px] text-slate-600 tabular-nums">
-              {style.nodePadding} px
-            </span>
-          </div>
-          <input
-            id="slider-node-padding"
-            type="range"
-            min={6}
-            max={48}
-            step={1}
-            value={style.nodePadding}
-            onChange={(e) => onChange({ nodePadding: Number(e.target.value) })}
-            className="w-full"
-          />
-        </div>
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <label htmlFor="slider-node-padding" className="text-slate-700">
+                  Node Padding
+                </label>
+                <span className="font-mono text-[11px] text-slate-600 tabular-nums">
+                  {style.nodePadding} px
+                </span>
+              </div>
+              <input
+                id="slider-node-padding"
+                type="range"
+                min={6}
+                max={48}
+                step={1}
+                value={style.nodePadding}
+                onChange={(e) => onChange({ nodePadding: Number(e.target.value) })}
+                className="w-full"
+              />
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <label htmlFor="slider-arc-thickness" className="text-slate-700">
+                  Arc Ring Thickness
+                </label>
+                <span className="font-mono text-[11px] text-slate-600 tabular-nums">
+                  {style.chordRingThickness} px
+                </span>
+              </div>
+              <input
+                id="slider-arc-thickness"
+                type="range"
+                min={8}
+                max={34}
+                step={1}
+                value={style.chordRingThickness}
+                onChange={(e) => onChange({ chordRingThickness: Number(e.target.value) })}
+                className="w-full"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <label htmlFor="slider-arc-gap" className="text-slate-700">
+                  Arc Padding Gap
+                </label>
+                <span className="font-mono text-[11px] text-slate-600 tabular-nums">
+                  {style.chordPadAngle}°
+                </span>
+              </div>
+              <input
+                id="slider-arc-gap"
+                type="range"
+                min={0}
+                max={12}
+                step={0.5}
+                value={style.chordPadAngle}
+                onChange={(e) => onChange({ chordPadAngle: Number(e.target.value) })}
+                className="w-full"
+              />
+            </div>
+          </>
+        )}
 
         <div className="space-y-1.5">
           <div className="flex items-center justify-between text-xs">
@@ -174,7 +227,7 @@ export const LayoutStylingTab: React.FC<LayoutStylingTabProps> = ({ style, onCha
 
       <hr className="border-slate-200" />
 
-      {/* Link Colour Mode & Alignment */}
+      {/* Link Colour Mode & Chart-Specific Layout Mode */}
       <section className="space-y-4">
         <div className="space-y-2">
           <span className="block text-xs font-medium text-slate-800">Link Colour Mode</span>
@@ -196,25 +249,55 @@ export const LayoutStylingTab: React.FC<LayoutStylingTabProps> = ({ style, onCha
           </div>
         </div>
 
-        <div className="space-y-2">
-          <span className="block text-xs font-medium text-slate-800">Node Alignment</span>
-          <div className="grid grid-cols-4 gap-1 rounded-lg bg-slate-100 p-1">
-            {alignModes.map((mode) => (
+        {chartType === 'sankey' ? (
+          <div className="space-y-2">
+            <span className="block text-xs font-medium text-slate-800">Node Alignment</span>
+            <div className="grid grid-cols-4 gap-1 rounded-lg bg-slate-100 p-1">
+              {alignModes.map((mode) => (
+                <button
+                  key={mode.value}
+                  type="button"
+                  onClick={() => onChange({ nodeAlign: mode.value })}
+                  className={`rounded-md px-2 py-1.5 text-[11px] font-medium transition-colors whitespace-nowrap ${
+                    style.nodeAlign === mode.value
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {mode.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <span className="block text-xs font-medium text-slate-800">Chord Ribbon Mode</span>
+            <div className="grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1">
               <button
-                key={mode.value}
                 type="button"
-                onClick={() => onChange({ nodeAlign: mode.value })}
+                onClick={() => onChange({ chordDirected: true })}
                 className={`rounded-md px-2 py-1.5 text-[11px] font-medium transition-colors whitespace-nowrap ${
-                  style.nodeAlign === mode.value
+                  style.chordDirected
                     ? 'bg-white text-slate-900 shadow-xs'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                {mode.label}
+                Directed Flows
               </button>
-            ))}
+              <button
+                type="button"
+                onClick={() => onChange({ chordDirected: false })}
+                className={`rounded-md px-2 py-1.5 text-[11px] font-medium transition-colors whitespace-nowrap ${
+                  !style.chordDirected
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Combined Bilateral
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       </section>
 
       <hr className="border-slate-200" />

@@ -1,12 +1,16 @@
 import React, { useState } from 'react';
 import { Check, Plus, RotateCcw, X } from 'lucide-react';
 import { EXECUTIVE_PALETTES, normalizeHex } from '../palettes';
-import { ComputedSankeyNode } from '../types';
+
+interface NodeColorEntry {
+  name: string;
+  color: string;
+}
 
 interface PalettesTabProps {
   activePaletteId: string;
   activeColors: string[];
-  nodes: ComputedSankeyNode[];
+  nodes: NodeColorEntry[];
   selectedNodeName: string | null;
   nodeColorOverrides: Record<string, string>;
   onSelectPalette: (paletteId: string) => void;

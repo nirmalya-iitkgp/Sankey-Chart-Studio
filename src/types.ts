@@ -7,6 +7,8 @@ export interface FlowRow {
 
 export type AspectRatio = '16:9' | '4:3';
 
+export type ChartType = 'sankey' | 'chord';
+
 export type LinkColorMode = 'source' | 'target' | 'neutral';
 
 export type NumberFormat = 'raw' | 'usd' | 'inr' | 'compact' | 'percent';
@@ -31,6 +33,9 @@ export interface SankeyStyleConfig {
   showHeader: boolean;
   title: string;
   subtitle: string;
+  chordRingThickness: number;
+  chordPadAngle: number;
+  chordDirected: boolean;
 }
 
 export interface ComputedSankeyNode {
@@ -61,6 +66,34 @@ export interface ComputedSankeyLink {
   color: string;
 }
 
+export interface ComputedChordGroup {
+  index: number;
+  name: string;
+  startAngle: number;
+  endAngle: number;
+  midAngle: number;
+  value: number;
+  color: string;
+  labelX: number;
+  labelY: number;
+  isLeftSide: boolean;
+}
+
+export interface ComputedChordRibbon {
+  index: number;
+  sourceName: string;
+  targetName: string;
+  sourceIndex: number;
+  targetIndex: number;
+  sourceStartAngle: number;
+  sourceEndAngle: number;
+  targetStartAngle: number;
+  targetEndAngle: number;
+  sourceValue: number;
+  targetValue: number;
+  color: string;
+}
+
 export interface DataDiagnostic {
   type: 'cycle' | 'self-loop' | 'invalid-value' | 'empty';
   message: string;
@@ -77,16 +110,31 @@ export interface SankeyLayoutResult {
   diagnostic: DataDiagnostic | null;
 }
 
+export interface ChordLayoutResult {
+  groups: ComputedChordGroup[];
+  ribbons: ComputedChordRibbon[];
+  centerX: number;
+  centerY: number;
+  innerRadius: number;
+  outerRadius: number;
+  totalFlow: number;
+  canvasWidth: number;
+  canvasHeight: number;
+  diagnostic: DataDiagnostic | null;
+}
+
 export interface SampleDataset {
   id: string;
   name: string;
   title: string;
   subtitle: string;
   numberFormat: NumberFormat;
+  recommendedChartType?: ChartType;
   rows: Omit<FlowRow, 'id'>[];
 }
 
 export interface SankeyDocumentState {
+  chartType: ChartType;
   rows: FlowRow[];
   aspectRatio: AspectRatio;
   activePaletteId: string;

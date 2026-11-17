@@ -97,6 +97,29 @@ export const SAMPLE_DATASETS: SampleDataset[] = [
       { source: 'Observability & Logs', target: 'Production', value: 145000 },
     ],
   },
+  {
+    id: 'regional-trade',
+    name: 'Global Trade Matrix (Chord)',
+    title: 'Cross-Regional Capital & Trade Flows',
+    subtitle: 'Bidirectional quarterly trade volume across major economic corridors ($B)',
+    numberFormat: 'usd',
+    recommendedChartType: 'chord',
+    rows: [
+      { source: 'North America', target: 'Europe', value: 340 },
+      { source: 'North America', target: 'APAC', value: 420 },
+      { source: 'North America', target: 'Latin America', value: 210 },
+      { source: 'Europe', target: 'North America', value: 390 },
+      { source: 'Europe', target: 'APAC', value: 280 },
+      { source: 'Europe', target: 'MEA', value: 175 },
+      { source: 'APAC', target: 'North America', value: 510 },
+      { source: 'APAC', target: 'Europe', value: 320 },
+      { source: 'APAC', target: 'MEA', value: 195 },
+      { source: 'Latin America', target: 'North America', value: 245 },
+      { source: 'Latin America', target: 'Europe', value: 115 },
+      { source: 'MEA', target: 'Europe', value: 160 },
+      { source: 'MEA', target: 'APAC', value: 230 },
+    ],
+  },
 ];
 
 export function normalizeHex(input: string): string | null {

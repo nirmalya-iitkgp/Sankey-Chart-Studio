@@ -1,8 +1,13 @@
 import React, { useState } from 'react';
 import { AlertTriangle, RotateCcw, X } from 'lucide-react';
+import { buildChordGroupSvgPath, buildChordRibbonSvgPath } from '../chordMath';
 import { buildRibbonSvgPath, formatSankeyValue } from '../sankeyMath';
 import {
   AspectRatio,
+  ChartType,
+  ChordLayoutResult,
+  ComputedChordGroup,
+  ComputedChordRibbon,
   ComputedSankeyLink,
   ComputedSankeyNode,
   SankeyLayoutResult,
@@ -11,7 +16,9 @@ import {
 
 interface SlidePreviewCanvasProps {
   svgRef: React.RefObject<SVGSVGElement | null>;
-  layout: SankeyLayoutResult;
+  chartType: ChartType;
+  sankeyLayout: SankeyLayoutResult;
+  chordLayout: ChordLayoutResult;
   aspectRatio: AspectRatio;
   style: SankeyStyleConfig;
   selectedNodeName: string | null;
@@ -24,7 +31,9 @@ interface SlidePreviewCanvasProps {
 
 export const SlidePreviewCanvas: React.FC<SlidePreviewCanvasProps> = ({
   svgRef,
-  layout,
+  chartType,
+  sankeyLayout,
+  chordLayout,
   aspectRatio,
   style,
   selectedNodeName,
@@ -34,34 +43,64 @@ export const SlidePreviewCanvas: React.FC<SlidePreviewCanvasProps> = ({
   onClearNodeColor,
   onUpdateStyle,
 }) => {
-  const [hoveredLinkIndex, setHoveredLinkIndex] = useState<number | null>(null);
+  const [hoveredSankeyLinkIdx, setHoveredSankeyLinkIdx] = useState<number | null>(null);
+  const [hoveredChordRibbonIdx, setHoveredChordRibbonIdx] = useState<number | null>(null);
   const [hoveredNodeName, setHoveredNodeName] = useState<string | null>(null);
   const [editingHeader, setEditingHeader] = useState(false);
 
-  const selectedNode = layout.nodes.find((n) => n.name === selectedNodeName) || null;
-  const hoveredLink: ComputedSankeyLink | null =
-    hoveredLinkIndex !== null
-      ? layout.links.find((l) => l.index === hoveredLinkIndex) || null
+  const activeDiagnostic =
+    chartType === 'sankey' ? sankeyLayout.diagnostic : chordLayout.diagnostic;
+  const canvasWidth =
+    chartType === 'sankey' ? sankeyLayout.canvasWidth : chordLayout.canvasWidth;
+  const canvasHeight =
+    chartType === 'sankey' ? sankeyLayout.canvasHeight : chordLayout.canvasHeight;
+  const totalDenominator =
+    chartType === 'sankey' ? sankeyLayout.totalRootInflow : chordLayout.totalFlow;
+
+  const selectedNodeEntry: { name: string; color: string } | null =
+    chartType === 'sankey'
+      ? sankeyLayout.nodes.find((n) => n.name === selectedNodeName) || null
+      : chordLayout.groups.find((g) => g.name === selectedNodeName) || null;
+
+  const hoveredSankeyLink: ComputedSankeyLink | null =
+    chartType === 'sankey' && hoveredSankeyLinkIdx !== null
+      ? sankeyLayout.links.find((l) => l.index === hoveredSankeyLinkIdx) || null
       : null;
-  const hoveredNode: ComputedSankeyNode | null =
+
+  const hoveredChordRibbon: ComputedChordRibbon | null =
+    chartType === 'chord' && hoveredChordRibbonIdx !== null
+      ? chordLayout.ribbons.find((r) => r.index === hoveredChordRibbonIdx) || null
+      : null;
+
+  const hoveredNode: { name: string; color: string; value: number } | null =
     hoveredNodeName !== null
-      ? layout.nodes.find((n) => n.name === hoveredNodeName) || null
+      ? chartType === 'sankey'
+        ? sankeyLayout.nodes.find((n) => n.name === hoveredNodeName) || null
+        : chordLayout.groups.find((g) => g.name === hoveredNodeName) || null
       : null;
 
-  const isHighlightedLink = (link: ComputedSankeyLink): boolean => {
-    if (hoveredLinkIndex !== null) return link.index === hoveredLinkIndex;
-    if (hoveredNodeName !== null) {
-      return link.sourceName === hoveredNodeName || link.targetName === hoveredNodeName;
-    }
-    return false;
-  };
-
-  const linkOpacity = (link: ComputedSankeyLink): number => {
+  const sankeyLinkOpacity = (link: ComputedSankeyLink): number => {
     const base = style.ribbonOpacity / 100;
-    if (hoveredLinkIndex === null && hoveredNodeName === null) {
+    if (hoveredSankeyLinkIdx === null && hoveredNodeName === null) {
       return base;
     }
-    return isHighlightedLink(link) ? Math.min(0.92, base + 0.25) : Math.max(0.12, base * 0.35);
+    const isMatch =
+      hoveredSankeyLinkIdx !== null
+        ? link.index === hoveredSankeyLinkIdx
+        : link.sourceName === hoveredNodeName || link.targetName === hoveredNodeName;
+    return isMatch ? Math.min(0.92, base + 0.25) : Math.max(0.12, base * 0.35);
+  };
+
+  const chordRibbonOpacity = (ribbon: ComputedChordRibbon): number => {
+    const base = style.ribbonOpacity / 100;
+    if (hoveredChordRibbonIdx === null && hoveredNodeName === null) {
+      return base;
+    }
+    const isMatch =
+      hoveredChordRibbonIdx !== null
+        ? ribbon.index === hoveredChordRibbonIdx
+        : ribbon.sourceName === hoveredNodeName || ribbon.targetName === hoveredNodeName;
+    return isMatch ? Math.min(0.92, base + 0.25) : Math.max(0.1, base * 0.28);
   };
 
   return (
@@ -76,26 +115,26 @@ export const SlidePreviewCanvas: React.FC<SlidePreviewCanvasProps> = ({
             '0 18px 48px -12px rgba(15, 23, 42, 0.14), 0 0 0 1px rgba(15, 23, 42, 0.08)',
         }}
       >
-        {layout.diagnostic ? (
+        {activeDiagnostic ? (
           <div className="flex h-full w-full flex-col items-center justify-center px-8 text-center">
             <div className="flex h-11 w-11 items-center justify-center rounded-full bg-red-50 text-red-600">
               <AlertTriangle className="h-5 w-5" />
             </div>
             <h3 className="mt-4 font-display text-base font-semibold text-slate-900">
-              {layout.diagnostic.type === 'cycle'
+              {activeDiagnostic.type === 'cycle'
                 ? 'Circular Flow Loop Detected'
-                : layout.diagnostic.type === 'self-loop'
+                : activeDiagnostic.type === 'self-loop'
                 ? 'Self-Loop Detected'
                 : 'Diagram Cannot Render'}
             </h3>
             <p className="mt-2 max-w-md text-sm leading-relaxed text-slate-600">
-              {layout.diagnostic.message}
+              {activeDiagnostic.message}
             </p>
           </div>
         ) : (
           <svg
             ref={svgRef}
-            viewBox={`0 0 ${layout.canvasWidth} ${layout.canvasHeight}`}
+            viewBox={`0 0 ${canvasWidth} ${canvasHeight}`}
             className="h-full w-full select-none"
             onClick={(e) => {
               if (e.target === e.currentTarget) {
@@ -104,13 +143,7 @@ export const SlidePreviewCanvas: React.FC<SlidePreviewCanvasProps> = ({
             }}
           >
             {/* White Slide Background */}
-            <rect
-              x={0}
-              y={0}
-              width={layout.canvasWidth}
-              height={layout.canvasHeight}
-              fill="#FFFFFF"
-            />
+            <rect x={0} y={0} width={canvasWidth} height={canvasHeight} fill="#FFFFFF" />
 
             {/* Slide Title & Subtitle */}
             {style.showHeader && (
@@ -121,13 +154,7 @@ export const SlidePreviewCanvas: React.FC<SlidePreviewCanvasProps> = ({
                   setEditingHeader(true);
                 }}
               >
-                <rect
-                  x={40}
-                  y={16}
-                  width={layout.canvasWidth - 80}
-                  height={62}
-                  fill="transparent"
-                />
+                <rect x={40} y={16} width={canvasWidth - 80} height={62} fill="transparent" />
                 {style.title.trim() && (
                   <text
                     x={43.2}
@@ -142,118 +169,214 @@ export const SlidePreviewCanvas: React.FC<SlidePreviewCanvasProps> = ({
                   </text>
                 )}
                 {style.subtitle.trim() && (
-                  <text
-                    x={43.2}
-                    y={64}
-                    fontSize={11.5}
-                    fontWeight={400}
-                    fill="#64748B"
-                  >
+                  <text x={43.2} y={64} fontSize={11.5} fontWeight={400} fill="#64748B">
                     {style.subtitle}
                   </text>
                 )}
               </g>
             )}
 
-            {/* Sankey Ribbons */}
-            <g>
-              {layout.links.map((link) => (
-                <path
-                  key={`link-${link.index}-${link.sourceName}-${link.targetName}`}
-                  d={buildRibbonSvgPath(link)}
-                  fill={link.color}
-                  fillOpacity={linkOpacity(link)}
-                  className="transition-opacity duration-150"
-                  onMouseEnter={() => setHoveredLinkIndex(link.index)}
-                  onMouseLeave={() => setHoveredLinkIndex(null)}
-                />
-              ))}
-            </g>
-
-            {/* Sankey Nodes */}
-            <g>
-              {layout.nodes.map((node) => {
-                const isSelected = node.name === selectedNodeName;
-                const w = Math.max(node.x1 - node.x0, 2);
-                const h = Math.max(node.y1 - node.y0, 2);
-                return (
-                  <g
-                    key={`node-${node.name}`}
-                    className="cursor-pointer"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onSelectNode(isSelected ? null : node.name);
-                    }}
-                    onMouseEnter={() => setHoveredNodeName(node.name)}
-                    onMouseLeave={() => setHoveredNodeName(null)}
-                  >
-                    <rect
-                      x={node.x0}
-                      y={node.y0}
-                      width={w}
-                      height={h}
-                      rx={1}
-                      fill={node.color}
+            {chartType === 'sankey' ? (
+              <>
+                {/* Sankey Ribbons */}
+                <g>
+                  {sankeyLayout.links.map((link: ComputedSankeyLink) => (
+                    <path
+                      key={`link-${link.index}-${link.sourceName}-${link.targetName}`}
+                      d={buildRibbonSvgPath(link)}
+                      fill={link.color}
+                      fillOpacity={sankeyLinkOpacity(link)}
+                      className="transition-opacity duration-150"
+                      onMouseEnter={() => setHoveredSankeyLinkIdx(link.index)}
+                      onMouseLeave={() => setHoveredSankeyLinkIdx(null)}
                     />
-                    {isSelected && (
-                      <rect
-                        data-selection-ring="true"
-                        x={node.x0 - 2.5}
-                        y={node.y0 - 2.5}
-                        width={w + 5}
-                        height={h + 5}
-                        rx={2}
-                        fill="none"
-                        stroke="#0F172A"
-                        strokeWidth={1.75}
-                      />
-                    )}
-                  </g>
-                );
-              })}
-            </g>
+                  ))}
+                </g>
 
-            {/* Node Labels */}
-            <g className="pointer-events-none">
-              {layout.nodes.map((node) => {
-                const centerY = (node.y0 + node.y1) / 2;
-                const labelX = node.isRightmost ? node.x0 - 8 : node.x1 + 8;
-                const textAnchor = node.isRightmost ? 'end' : 'start';
-                const formattedVal = formatSankeyValue(
-                  node.value,
-                  style.numberFormat,
-                  layout.totalRootInflow
-                );
-
-                return (
-                  <g key={`label-${node.name}`}>
-                    <text
-                      x={labelX}
-                      y={style.showValues ? centerY - 2 : centerY + 3.5}
-                      textAnchor={textAnchor}
-                      fontSize={style.fontSize}
-                      fontWeight={600}
-                      fill="#0F172A"
-                    >
-                      {node.name}
-                    </text>
-                    {style.showValues && (
-                      <text
-                        x={labelX}
-                        y={centerY + style.fontSize * 0.95}
-                        textAnchor={textAnchor}
-                        fontSize={Math.max(8, style.fontSize - 1.5)}
-                        fontWeight={500}
-                        fill="#475569"
-                        className="sankey-value"
+                {/* Sankey Nodes */}
+                <g>
+                  {sankeyLayout.nodes.map((node: ComputedSankeyNode) => {
+                    const isSelected = node.name === selectedNodeName;
+                    const w = Math.max(node.x1 - node.x0, 2);
+                    const h = Math.max(node.y1 - node.y0, 2);
+                    return (
+                      <g
+                        key={`node-${node.name}`}
+                        className="cursor-pointer"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelectNode(isSelected ? null : node.name);
+                        }}
+                        onMouseEnter={() => setHoveredNodeName(node.name)}
+                        onMouseLeave={() => setHoveredNodeName(null)}
                       >
-                        {formattedVal}
-                      </text>
-                    )}
-                  </g>
-                );
-              })}
-            </g>
+                        <rect x={node.x0} y={node.y0} width={w} height={h} rx={1} fill={node.color} />
+                        {isSelected && (
+                          <rect
+                            data-selection-ring="true"
+                            x={node.x0 - 2.5}
+                            y={node.y0 - 2.5}
+                            width={w + 5}
+                            height={h + 5}
+                            rx={2}
+                            fill="none"
+                            stroke="#0F172A"
+                            strokeWidth={1.75}
+                          />
+                        )}
+                      </g>
+                    );
+                  })}
+                </g>
+
+                {/* Sankey Labels */}
+                <g className="pointer-events-none">
+                  {sankeyLayout.nodes.map((node: ComputedSankeyNode) => {
+                    const centerY = (node.y0 + node.y1) / 2;
+                    const labelX = node.isRightmost ? node.x0 - 8 : node.x1 + 8;
+                    const textAnchor = node.isRightmost ? 'end' : 'start';
+                    const formattedVal = formatSankeyValue(
+                      node.value,
+                      style.numberFormat,
+                      sankeyLayout.totalRootInflow
+                    );
+
+                    return (
+                      <g key={`label-${node.name}`}>
+                        <text
+                          x={labelX}
+                          y={style.showValues ? centerY - 2 : centerY + 3.5}
+                          textAnchor={textAnchor}
+                          fontSize={style.fontSize}
+                          fontWeight={600}
+                          fill="#0F172A"
+                        >
+                          {node.name}
+                        </text>
+                        {style.showValues && (
+                          <text
+                            x={labelX}
+                            y={centerY + style.fontSize * 0.95}
+                            textAnchor={textAnchor}
+                            fontSize={Math.max(8, style.fontSize - 1.5)}
+                            fontWeight={500}
+                            fill="#475569"
+                            className="sankey-value"
+                          >
+                            {formattedVal}
+                          </text>
+                        )}
+                      </g>
+                    );
+                  })}
+                </g>
+              </>
+            ) : (
+              <>
+                {/* Chord Ribbons */}
+                <g>
+                  {chordLayout.ribbons.map((ribbon: ComputedChordRibbon) => (
+                    <path
+                      key={`chord-ribbon-${ribbon.index}-${ribbon.sourceName}-${ribbon.targetName}`}
+                      d={buildChordRibbonSvgPath(
+                        ribbon,
+                        chordLayout.innerRadius,
+                        chordLayout.centerX,
+                        chordLayout.centerY
+                      )}
+                      fill={ribbon.color}
+                      fillOpacity={chordRibbonOpacity(ribbon)}
+                      className="transition-opacity duration-150"
+                      onMouseEnter={() => setHoveredChordRibbonIdx(ribbon.index)}
+                      onMouseLeave={() => setHoveredChordRibbonIdx(null)}
+                    />
+                  ))}
+                </g>
+
+                {/* Chord Outer Group Arcs */}
+                <g>
+                  {chordLayout.groups.map((group: ComputedChordGroup) => {
+                    const isSelected = group.name === selectedNodeName;
+                    const d = buildChordGroupSvgPath(
+                      group,
+                      chordLayout.innerRadius,
+                      chordLayout.outerRadius,
+                      chordLayout.centerX,
+                      chordLayout.centerY
+                    );
+                    return (
+                      <g
+                        key={`chord-group-${group.name}`}
+                        className="cursor-pointer"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelectNode(isSelected ? null : group.name);
+                        }}
+                        onMouseEnter={() => setHoveredNodeName(group.name)}
+                        onMouseLeave={() => setHoveredNodeName(null)}
+                      >
+                        <path d={d} fill={group.color} />
+                        {isSelected && (
+                          <path
+                            data-selection-ring="true"
+                            d={buildChordGroupSvgPath(
+                              group,
+                              chordLayout.innerRadius - 2,
+                              chordLayout.outerRadius + 2.5,
+                              chordLayout.centerX,
+                              chordLayout.centerY
+                            )}
+                            fill="none"
+                            stroke="#0F172A"
+                            strokeWidth={1.75}
+                          />
+                        )}
+                      </g>
+                    );
+                  })}
+                </g>
+
+                {/* Chord Radial Labels */}
+                <g className="pointer-events-none">
+                  {chordLayout.groups.map((group: ComputedChordGroup) => {
+                    const textAnchor = group.isLeftSide ? 'end' : 'start';
+                    const formattedVal = formatSankeyValue(
+                      group.value,
+                      style.numberFormat,
+                      chordLayout.totalFlow
+                    );
+
+                    return (
+                      <g key={`chord-label-${group.name}`}>
+                        <text
+                          x={group.labelX}
+                          y={style.showValues ? group.labelY - 2 : group.labelY + 3.5}
+                          textAnchor={textAnchor}
+                          fontSize={style.fontSize}
+                          fontWeight={600}
+                          fill="#0F172A"
+                        >
+                          {group.name}
+                        </text>
+                        {style.showValues && (
+                          <text
+                            x={group.labelX}
+                            y={group.labelY + style.fontSize * 0.95}
+                            textAnchor={textAnchor}
+                            fontSize={Math.max(8, style.fontSize - 1.5)}
+                            fontWeight={500}
+                            fill="#475569"
+                            className="sankey-value"
+                          >
+                            {formattedVal}
+                          </text>
+                        )}
+                      </g>
+                    );
+                  })}
+                </g>
+              </>
+            )}
           </svg>
         )}
 
@@ -296,7 +419,7 @@ export const SlidePreviewCanvas: React.FC<SlidePreviewCanvasProps> = ({
         )}
 
         {/* Click-Node Floating Colour Popover */}
-        {selectedNode && (
+        {selectedNodeEntry && (
           <div
             className="absolute bottom-3 left-3 z-20 flex items-center gap-3 rounded-lg border border-slate-200 bg-white/95 px-3 py-2 shadow-lg backdrop-blur-xs"
             onClick={(e) => e.stopPropagation()}
@@ -304,23 +427,26 @@ export const SlidePreviewCanvas: React.FC<SlidePreviewCanvasProps> = ({
             <label className="relative h-6 w-6 shrink-0 cursor-pointer overflow-hidden rounded border border-black/15">
               <input
                 type="color"
-                value={selectedNode.color}
-                onChange={(e) => onSetNodeColor(selectedNode.name, e.target.value)}
-                aria-label={`Override color for ${selectedNode.name}`}
+                value={selectedNodeEntry.color}
+                onChange={(e) => onSetNodeColor(selectedNodeEntry.name, e.target.value)}
+                aria-label={`Override color for ${selectedNodeEntry.name}`}
                 className="absolute inset-0 h-10 w-10 -translate-x-2 -translate-y-2 cursor-pointer opacity-0"
               />
-              <span className="block h-full w-full" style={{ backgroundColor: selectedNode.color }} />
+              <span
+                className="block h-full w-full"
+                style={{ backgroundColor: selectedNodeEntry.color }}
+              />
             </label>
             <div className="min-w-0">
-              <div className="text-xs font-semibold text-slate-900">{selectedNode.name}</div>
+              <div className="text-xs font-semibold text-slate-900">{selectedNodeEntry.name}</div>
               <div className="font-mono text-[11px] uppercase text-slate-500">
-                {selectedNode.color}
+                {selectedNodeEntry.color}
               </div>
             </div>
-            {nodeColorOverrides[selectedNode.name] && (
+            {nodeColorOverrides[selectedNodeEntry.name] && (
               <button
                 type="button"
-                onClick={() => onClearNodeColor(selectedNode.name)}
+                onClick={() => onClearNodeColor(selectedNodeEntry.name)}
                 className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap"
               >
                 <RotateCcw className="h-3 w-3" />
@@ -339,26 +465,63 @@ export const SlidePreviewCanvas: React.FC<SlidePreviewCanvasProps> = ({
         )}
 
         {/* Subtle Hover Inspection Bar */}
-        {(hoveredLink || hoveredNode) && !selectedNode && (
+        {(hoveredSankeyLink || hoveredChordRibbon || hoveredNode) && !selectedNodeEntry && (
           <div className="pointer-events-none absolute bottom-3 left-3 z-10 flex items-center gap-2 rounded-md border border-slate-200 bg-white/95 px-2.5 py-1.5 text-xs text-slate-800 shadow-sm tabular-nums">
-            {hoveredLink ? (
+            {hoveredSankeyLink ? (
               <>
                 <span
                   className="h-2.5 w-2.5 shrink-0 rounded-[2px]"
-                  style={{ backgroundColor: hoveredLink.color }}
+                  style={{ backgroundColor: hoveredSankeyLink.color }}
                 />
                 <span className="font-medium">
-                  {hoveredLink.sourceName} &rarr; {hoveredLink.targetName}
+                  {hoveredSankeyLink.sourceName} &rarr; {hoveredSankeyLink.targetName}
                 </span>
                 <span className="text-slate-300" aria-hidden="true">·</span>
                 <span className="font-mono font-medium text-slate-900">
-                  {formatSankeyValue(hoveredLink.value, style.numberFormat, layout.totalRootInflow)}
+                  {formatSankeyValue(
+                    hoveredSankeyLink.value,
+                    style.numberFormat,
+                    totalDenominator
+                  )}
                 </span>
                 {style.numberFormat !== 'percent' && (
                   <>
                     <span className="text-slate-300" aria-hidden="true">·</span>
                     <span className="font-mono text-slate-500">
-                      {((hoveredLink.value / Math.max(layout.totalRootInflow, 1)) * 100).toFixed(1)}%
+                      {((hoveredSankeyLink.value / Math.max(totalDenominator, 1)) * 100).toFixed(1)}%
+                    </span>
+                  </>
+                )}
+              </>
+            ) : hoveredChordRibbon ? (
+              <>
+                <span
+                  className="h-2.5 w-2.5 shrink-0 rounded-[2px]"
+                  style={{ backgroundColor: hoveredChordRibbon.color }}
+                />
+                <span className="font-medium">
+                  {hoveredChordRibbon.sourceName} &rarr; {hoveredChordRibbon.targetName}
+                </span>
+                <span className="text-slate-300" aria-hidden="true">·</span>
+                <span className="font-mono font-medium text-slate-900">
+                  {formatSankeyValue(
+                    hoveredChordRibbon.sourceValue,
+                    style.numberFormat,
+                    totalDenominator
+                  )}
+                </span>
+                {!style.chordDirected && hoveredChordRibbon.targetValue > 0 && (
+                  <>
+                    <span className="text-slate-300" aria-hidden="true">·</span>
+                    <span className="text-slate-500">
+                      return:{' '}
+                      <span className="font-mono text-slate-800">
+                        {formatSankeyValue(
+                          hoveredChordRibbon.targetValue,
+                          style.numberFormat,
+                          totalDenominator
+                        )}
+                      </span>
                     </span>
                   </>
                 )}
@@ -372,10 +535,10 @@ export const SlidePreviewCanvas: React.FC<SlidePreviewCanvasProps> = ({
                 <span className="font-medium">{hoveredNode.name}</span>
                 <span className="text-slate-300" aria-hidden="true">·</span>
                 <span className="font-mono font-medium text-slate-900">
-                  {formatSankeyValue(hoveredNode.value, style.numberFormat, layout.totalRootInflow)}
+                  {formatSankeyValue(hoveredNode.value, style.numberFormat, totalDenominator)}
                 </span>
                 <span className="text-slate-300" aria-hidden="true">·</span>
-                <span className="text-[11px] text-slate-500">Click node to recolour</span>
+                <span className="text-[11px] text-slate-500">Click to recolour</span>
               </>
             ) : null}
           </div>
@@ -388,7 +551,11 @@ export const SlidePreviewCanvas: React.FC<SlidePreviewCanvasProps> = ({
           {aspectRatio === '16:9' ? '16:9 Widescreen (13.33" × 7.5")' : '4:3 Standard (10.0" × 7.5")'}
         </span>
         <span aria-hidden="true">·</span>
-        <span>Click slide title to edit or click any node bar to recolour</span>
+        <span>
+          {chartType === 'sankey' ? 'Sankey Flow' : 'Chord Matrix'}
+        </span>
+        <span aria-hidden="true">·</span>
+        <span>Click slide title to edit or click any node to recolour</span>
       </div>
     </div>
   );

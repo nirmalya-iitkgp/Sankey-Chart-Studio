@@ -1,12 +1,63 @@
 import PptxGenJS from 'pptxgenjs';
+import { buildChordGroupPptxShape, buildChordRibbonPptxShape } from './chordMath';
 import { stripHash } from './palettes';
 import { formatSankeyValue, getSlideCanvasDimensions } from './sankeyMath';
-import { AspectRatio, SankeyLayoutResult, SankeyStyleConfig } from './types';
+import {
+  AspectRatio,
+  ChordLayoutResult,
+  SankeyLayoutResult,
+  SankeyStyleConfig,
+} from './types';
 
 const PX_PER_INCH = 72;
 
 function toInches(px: number): number {
   return Number((px / PX_PER_INCH).toFixed(4));
+}
+
+function addSlideHeader(
+  slide: PptxGenJS.Slide,
+  inchesWidth: number,
+  style: SankeyStyleConfig
+): void {
+  if (!style.showHeader) return;
+
+  if (style.title.trim()) {
+    slide.addText(style.title.trim(), {
+      x: 0.6,
+      y: 0.34,
+      w: inchesWidth - 1.2,
+      h: 0.42,
+      fontSize: 21,
+      bold: true,
+      fontFace: 'Arial',
+      color: '0F172A',
+      margin: 0,
+      valign: 'top',
+    });
+  }
+
+  if (style.subtitle.trim()) {
+    slide.addText(style.subtitle.trim(), {
+      x: 0.6,
+      y: 0.74,
+      w: inchesWidth - 1.2,
+      h: 0.28,
+      fontSize: 11,
+      fontFace: 'Arial',
+      color: '64748B',
+      margin: 0,
+      valign: 'top',
+    });
+  }
+}
+
+function sanitizeFileName(title: string, fallback: string): string {
+  const safe = (title || fallback)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '');
+  return `${safe || fallback}.pptx`;
 }
 
 export async function exportSankeyToPptx(
@@ -27,44 +78,11 @@ export async function exportSankeyToPptx(
   slide.background = { color: 'FFFFFF' };
 
   const { inchesWidth } = getSlideCanvasDimensions(aspectRatio);
-
-  // 1. Optional Slide Title & Subtitle as native PowerPoint text boxes
-  if (style.showHeader) {
-    if (style.title.trim()) {
-      slide.addText(style.title.trim(), {
-        x: 0.6,
-        y: 0.34,
-        w: inchesWidth - 1.2,
-        h: 0.42,
-        fontSize: 21,
-        bold: true,
-        fontFace: 'Arial',
-        color: '0F172A',
-        margin: 0,
-        valign: 'top',
-      });
-    }
-
-    if (style.subtitle.trim()) {
-      slide.addText(style.subtitle.trim(), {
-        x: 0.6,
-        y: 0.74,
-        w: inchesWidth - 1.2,
-        h: 0.28,
-        fontSize: 11,
-        fontFace: 'Arial',
-        color: '64748B',
-        margin: 0,
-        valign: 'top',
-      });
-    }
-  }
+  addSlideHeader(slide, inchesWidth, style);
 
   const ribbonTransparency = Math.max(0, Math.min(95, 100 - style.ribbonOpacity));
 
-  // 2. Curved Ribbons as Native Freeform Shapes (custGeom)
-  // Using tight per-ribbon bounding boxes with local coordinates so every ribbon
-  // can be clicked, dragged, and recolored individually in PowerPoint.
+  // Curved Ribbons as Native Freeform Shapes (custGeom)
   for (const link of layout.links) {
     const x0 = toInches(link.source.x1);
     const x1 = toInches(link.target.x0);
@@ -134,7 +152,7 @@ export async function exportSankeyToPptx(
     });
   }
 
-  // 3. Nodes as Native Rectangles
+  // Nodes as Native Rectangles
   for (const node of layout.nodes) {
     const x = toInches(node.x0);
     const y = toInches(node.y0);
@@ -151,7 +169,7 @@ export async function exportSankeyToPptx(
     });
   }
 
-  // 4. Node Labels as Native Text Boxes
+  // Node Labels as Native Text Boxes
   const labelBoxW = 2.25;
   const labelBoxH = 0.46;
   const labelGap = 0.09;
@@ -206,10 +224,126 @@ export async function exportSankeyToPptx(
     });
   }
 
-  const safeFileBase = (style.title || 'sankey-diagram')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '');
+  await pptx.writeFile({ fileName: sanitizeFileName(style.title, 'sankey-diagram') });
+}
 
-  await pptx.writeFile({ fileName: `${safeFileBase || 'sankey-diagram'}.pptx` });
+export async function exportChordToPptx(
+  layout: ChordLayoutResult,
+  aspectRatio: AspectRatio,
+  style: SankeyStyleConfig
+): Promise<void> {
+  if (layout.diagnostic || layout.groups.length === 0) {
+    throw new Error('Cannot export PPTX while diagram data is empty or contains errors.');
+  }
+
+  const pptx = new PptxGenJS();
+  pptx.layout = aspectRatio === '16:9' ? 'LAYOUT_WIDE' : 'LAYOUT_4x3';
+  pptx.author = 'SankeyStudio';
+  pptx.title = style.title || 'Chord Flow Diagram';
+
+  const slide = pptx.addSlide();
+  slide.background = { color: 'FFFFFF' };
+
+  const { inchesWidth } = getSlideCanvasDimensions(aspectRatio);
+  addSlideHeader(slide, inchesWidth, style);
+
+  const ribbonTransparency = Math.max(0, Math.min(95, 100 - style.ribbonOpacity));
+
+  // 1. Chord Ribbons as Native custGeom Shapes
+  for (const ribbon of layout.ribbons) {
+    const geom = buildChordRibbonPptxShape(
+      ribbon,
+      layout.innerRadius,
+      layout.centerX,
+      layout.centerY
+    );
+
+    slide.addShape('custGeom' as PptxGenJS.SHAPE_NAME, {
+      x: geom.x,
+      y: geom.y,
+      w: geom.w,
+      h: geom.h,
+      fill: {
+        color: stripHash(ribbon.color),
+        transparency: ribbonTransparency,
+      },
+      line: { width: 0 },
+      points: geom.points,
+    });
+  }
+
+  // 2. Outer Group Arcs as Native custGeom Shapes
+  for (const group of layout.groups) {
+    const geom = buildChordGroupPptxShape(
+      group,
+      layout.innerRadius,
+      layout.outerRadius,
+      layout.centerX,
+      layout.centerY
+    );
+
+    slide.addShape('custGeom' as PptxGenJS.SHAPE_NAME, {
+      x: geom.x,
+      y: geom.y,
+      w: geom.w,
+      h: geom.h,
+      fill: { color: stripHash(group.color) },
+      line: { width: 0 },
+      points: geom.points,
+    });
+  }
+
+  // 3. Radial Labels as Native Text Boxes
+  const labelBoxW = 2.2;
+  const labelBoxH = 0.44;
+  const nameFontPt = Math.max(8, Math.min(18, style.fontSize));
+  const valueFontPt = Math.max(7.5, nameFontPt - 1.5);
+
+  for (const group of layout.groups) {
+    const lx = toInches(group.labelX);
+    const ly = toInches(group.labelY);
+
+    const textRuns: PptxGenJS.TextProps[] = [
+      {
+        text: group.name,
+        options: {
+          bold: true,
+          fontSize: nameFontPt,
+          fontFace: 'Arial',
+          color: '0F172A',
+          breakLine: style.showValues,
+        },
+      },
+    ];
+
+    if (style.showValues) {
+      textRuns.push({
+        text: formatSankeyValue(group.value, style.numberFormat, layout.totalFlow),
+        options: {
+          bold: false,
+          fontSize: valueFontPt,
+          fontFace: 'Arial',
+          color: '475569',
+        },
+      });
+    }
+
+    const boxX = group.isLeftSide
+      ? Math.max(0.08, lx - labelBoxW)
+      : Math.min(inchesWidth - labelBoxW - 0.08, lx);
+    const boxY = Math.max(0.1, ly - labelBoxH / 2);
+
+    slide.addText(textRuns, {
+      x: Number(boxX.toFixed(4)),
+      y: Number(boxY.toFixed(4)),
+      w: labelBoxW,
+      h: labelBoxH,
+      align: group.isLeftSide ? 'right' : 'left',
+      valign: 'middle',
+      margin: 0,
+      wrap: true,
+    });
+  }
+
+  await pptx.writeFile({ fileName: sanitizeFileName(style.title, 'chord-diagram') });
 }

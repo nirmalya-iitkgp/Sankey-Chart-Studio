@@ -1,7 +1,9 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
+  CircleDot,
   Download,
   FileCode2,
+  GitMerge,
   Image as ImageIcon,
   Layers,
   Palette as PaletteIcon,
@@ -10,6 +12,7 @@ import {
   Table2,
   Undo2,
 } from 'lucide-react';
+import { computeChordLayout } from './chordMath';
 import { BulkPasteModal } from './components/BulkPasteModal';
 import { DataInputTab } from './components/DataInputTab';
 import { LayoutStylingTab } from './components/LayoutStylingTab';
@@ -17,9 +20,9 @@ import { PalettesTab } from './components/PalettesTab';
 import { SlidePreviewCanvas } from './components/SlidePreviewCanvas';
 import { exportSankeyToPng, exportSankeyToSvg } from './exportUtils';
 import { EXECUTIVE_PALETTES, SAMPLE_DATASETS } from './palettes';
-import { exportSankeyToPptx } from './pptxExporter';
+import { exportChordToPptx, exportSankeyToPptx } from './pptxExporter';
 import { computeSankeyLayout } from './sankeyMath';
-import { AspectRatio, FlowRow, SankeyDocumentState, SankeyStyleConfig } from './types';
+import { AspectRatio, ChartType, FlowRow, SankeyDocumentState, SankeyStyleConfig } from './types';
 import { useHistoryManager } from './useHistoryManager';
 
 type SidebarTab = 'data' | 'palettes' | 'layout';
@@ -41,6 +44,7 @@ function hydrateRows(rows: Array<Omit<FlowRow, 'id'>>): FlowRow[] {
 function createInitialDocumentState(): SankeyDocumentState {
   const initialSample = SAMPLE_DATASETS[0];
   return {
+    chartType: 'sankey',
     rows: hydrateRows(initialSample.rows),
     aspectRatio: '16:9',
     activePaletteId: EXECUTIVE_PALETTES[0].id,
@@ -58,6 +62,9 @@ function createInitialDocumentState(): SankeyDocumentState {
       showHeader: true,
       title: initialSample.title,
       subtitle: initialSample.subtitle,
+      chordRingThickness: 18,
+      chordPadAngle: 4,
+      chordDirected: true,
     },
   };
 }
@@ -74,7 +81,15 @@ export default function App() {
     redoLabel,
   } = useHistoryManager<SankeyDocumentState>(createInitialDocumentState);
 
-  const { rows, aspectRatio, activePaletteId, customPaletteColors, nodeColorOverrides, style } = doc;
+  const {
+    chartType,
+    rows,
+    aspectRatio,
+    activePaletteId,
+    customPaletteColors,
+    nodeColorOverrides,
+    style,
+  } = doc;
 
   const [activeTab, setActiveTab] = useState<SidebarTab>('data');
   const [selectedNodeName, setSelectedNodeName] = useState<string | null>(null);
@@ -95,10 +110,22 @@ export default function App() {
     [customPaletteColors, activePalette]
   );
 
-  const layout = useMemo(
+  const sankeyLayout = useMemo(
     () => computeSankeyLayout(rows, aspectRatio, style, activeColors, nodeColorOverrides),
     [rows, aspectRatio, style, activeColors, nodeColorOverrides]
   );
+
+  const chordLayout = useMemo(
+    () => computeChordLayout(rows, aspectRatio, style, activeColors, nodeColorOverrides),
+    [rows, aspectRatio, style, activeColors, nodeColorOverrides]
+  );
+
+  const activeDiagnostic =
+    chartType === 'sankey' ? sankeyLayout.diagnostic : chordLayout.diagnostic;
+  const activeNodeEntries =
+    chartType === 'sankey' ? sankeyLayout.nodes : chordLayout.groups;
+  const activeTotalFlow =
+    chartType === 'sankey' ? sankeyLayout.totalRootInflow : chordLayout.totalFlow;
 
   const flashStatus = useCallback((msg: string) => {
     setExportStatus(msg);
@@ -106,6 +133,16 @@ export default function App() {
       setExportStatus((current) => (current === msg ? null : current));
     }, 3200);
   }, []);
+
+  const handleSetChartType = useCallback(
+    (nextType: ChartType) => {
+      commit(
+        (prev) => (prev.chartType === nextType ? prev : { ...prev, chartType: nextType }),
+        { label: `Switch to ${nextType === 'chord' ? 'Chord' : 'Sankey'} chart` }
+      );
+    },
+    [commit]
+  );
 
   const handleSetAspectRatio = useCallback(
     (nextRatio: AspectRatio) => {
@@ -197,6 +234,7 @@ export default function App() {
       commit(
         (prev) => ({
           ...prev,
+          chartType: found.recommendedChartType ?? prev.chartType,
           rows: hydrateRows(found.rows),
           nodeColorOverrides: {},
           style: {
@@ -351,6 +389,8 @@ export default function App() {
         'fontSize',
         'title',
         'subtitle',
+        'chordRingThickness',
+        'chordPadAngle',
       ]);
       const patchKeys = Object.keys(patch).sort();
       const isContinuous = patchKeys.every((k) => continuousKeys.has(k));
@@ -370,13 +410,17 @@ export default function App() {
   );
 
   const handleExportPptx = async () => {
-    if (layout.diagnostic || layout.nodes.length === 0) {
+    if (activeDiagnostic || activeNodeEntries.length === 0) {
       flashStatus('Fix data errors before exporting.');
       return;
     }
     setIsExportingPptx(true);
     try {
-      await exportSankeyToPptx(layout, aspectRatio, style);
+      if (chartType === 'chord') {
+        await exportChordToPptx(chordLayout, aspectRatio, style);
+      } else {
+        await exportSankeyToPptx(sankeyLayout, aspectRatio, style);
+      }
       flashStatus('Native PPTX downloaded.');
     } catch (err) {
       flashStatus(err instanceof Error ? err.message : 'PPTX export failed.');
@@ -386,7 +430,7 @@ export default function App() {
   };
 
   const handleExportSvg = () => {
-    if (!svgRef.current || layout.diagnostic || layout.nodes.length === 0) {
+    if (!svgRef.current || activeDiagnostic || activeNodeEntries.length === 0) {
       flashStatus('Fix data errors before exporting.');
       return;
     }
@@ -395,7 +439,7 @@ export default function App() {
   };
 
   const handleExportPng = async () => {
-    if (!svgRef.current || layout.diagnostic || layout.nodes.length === 0) {
+    if (!svgRef.current || activeDiagnostic || activeNodeEntries.length === 0) {
       flashStatus('Fix data errors before exporting.');
       return;
     }
@@ -410,7 +454,7 @@ export default function App() {
     }
   };
 
-  const canExport = !layout.diagnostic && layout.nodes.length > 0;
+  const canExport = !activeDiagnostic && activeNodeEntries.length > 0;
 
   return (
     <div className="flex min-h-screen flex-col bg-[#F4F5F7] text-slate-900 lg:h-screen lg:overflow-hidden">
@@ -522,6 +566,43 @@ export default function App() {
       <div className="flex flex-1 flex-col lg:flex-row lg:overflow-hidden">
         {/* Left Sidebar (380px width, scrollable) */}
         <aside className="flex w-full shrink-0 flex-col border-b border-slate-200 bg-white lg:w-[380px] lg:border-b-0 lg:border-r lg:overflow-hidden">
+          {/* Diagram Type Switcher */}
+          <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-2.5">
+            <span className="text-xs font-medium text-slate-700 whitespace-nowrap">
+              Chart Type
+            </span>
+            <div
+              role="group"
+              aria-label="Chart type"
+              className="grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-0.5"
+            >
+              <button
+                type="button"
+                onClick={() => handleSetChartType('sankey')}
+                className={`inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-colors whitespace-nowrap ${
+                  chartType === 'sankey'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <GitMerge className="h-3.5 w-3.5" />
+                Sankey
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSetChartType('chord')}
+                className={`inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-colors whitespace-nowrap ${
+                  chartType === 'chord'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <CircleDot className="h-3.5 w-3.5" />
+                Chord
+              </button>
+            </div>
+          </div>
+
           {/* Mobile Aspect Ratio Switcher */}
           <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2 sm:hidden">
             <span className="text-xs font-medium text-slate-600">Slide Aspect Ratio</span>
@@ -602,9 +683,9 @@ export default function App() {
             {activeTab === 'data' && (
               <DataInputTab
                 rows={rows}
-                diagnostic={layout.diagnostic}
-                totalRootInflow={layout.totalRootInflow}
-                nodeCount={layout.nodes.length}
+                diagnostic={activeDiagnostic}
+                totalRootInflow={activeTotalFlow}
+                nodeCount={activeNodeEntries.length}
                 numberFormat={style.numberFormat}
                 onUpdateRow={handleUpdateRow}
                 onDeleteRow={handleDeleteRow}
@@ -618,7 +699,7 @@ export default function App() {
               <PalettesTab
                 activePaletteId={activePaletteId}
                 activeColors={activeColors}
-                nodes={layout.nodes}
+                nodes={activeNodeEntries}
                 selectedNodeName={selectedNodeName}
                 nodeColorOverrides={nodeColorOverrides}
                 onSelectPalette={handleSelectPalette}
@@ -634,7 +715,11 @@ export default function App() {
             )}
 
             {activeTab === 'layout' && (
-              <LayoutStylingTab style={style} onChange={handleUpdateStyle} />
+              <LayoutStylingTab
+                chartType={chartType}
+                style={style}
+                onChange={handleUpdateStyle}
+              />
             )}
           </div>
         </aside>
@@ -643,7 +728,9 @@ export default function App() {
         <main className="flex-1 overflow-auto bg-[#F4F5F7]">
           <SlidePreviewCanvas
             svgRef={svgRef}
-            layout={layout}
+            chartType={chartType}
+            sankeyLayout={sankeyLayout}
+            chordLayout={chordLayout}
             aspectRatio={aspectRatio}
             style={style}
             selectedNodeName={selectedNodeName}
